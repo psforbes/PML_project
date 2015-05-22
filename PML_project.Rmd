@@ -1,0 +1,119 @@
+
+# Evaluating Barbell Lift Performance
+#### author: Peter Forbes
+date: May 22, 2015
+
+This prediction exercise is based on the paper [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201) by Velloso, Bulling, Gellersen, Ugulino and Fuks. The data comes from sensors placed on the bodies of six subjects who then performed set of dumbell lifts under expert supervision and according to specifications.
+
+A According to specifications  
+B Throwing elbows to the front  
+C Lifting the dumbell only halfway  
+D Lowering the dumbell only halfway  
+E Throwing the hips to the front  
+
+The goal is do use the sensor data to evaluate the quality of exercise movements. This analysis considers a decision tree approach and a random forest approach to classify the correct and various improper movements. The random forest approach proved superior and was chosen for the final model. 
+
+### Getting and Cleaning the Data
+The assignment includes a specified [training data set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [final testing data set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv). The following steps were taken to clean the data. 
+
+1. Split the training dataset into training (60%) and testing (40%) databases.
+2. Check for and remove any covariates with near zero variance. This allows the model to focus on variables more likely to be useful predictors.
+3. Identify and remove any variables with a large share (>70%) of NAs. These columns are unlikely to be useful as well. 
+4. remove the first seven columns which are an index field, the names of the subjects and time stamp identifiers.
+
+The training set now includes only predictors that are likely to contribute to an effective classification model. The remaining columns are preserved in the training set and, with the exception of the classe column, collected in the final testing set. 
+
+```{r, echo=FALSE, message=FALSE}
+options(warn=-1)
+require(caret); require(ggplot2); require(randomForest); require(rpart); require(rattle)
+# Set urls for downloads
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+# Download files
+download.file(url, destfile = "./pml_training.csv", method = "curl")
+download.file(url2, destfile = "./pml_testing.csv", method = "curl")
+# Read csv files into training and testing_final datasets
+training_data <- read.csv("pml_training.csv", na.strings = c("NA", ""))
+testing_final <- read.csv("pml_testing.csv", na.strings = c("NA",""))
+
+# Set the seed and partition the training database into training and testing subsets
+set.seed(2343)
+inTrain <- createDataPartition(y = training_data$classe, p=0.6, list=FALSE)
+training <- training_data[inTrain,]; testing <- training_data[-inTrain,]
+# ID and Remove near zero variability variables 
+NZV <- nearZeroVar(training,saveMetrics = TRUE); training <- training[,!NZV$nzv]
+# ID and remove columns with over 70% NA values
+NAcols <- sapply(colnames(training), function(x) 
+    if(sum(is.na(training[,x])) > 0.7*nrow(training)){return(TRUE)}else{return(FALSE)})
+training <- training[,!NAcols]
+# Remove ID and time stamp columns 
+keep_cols <- colnames(training[7:length(colnames(training))])
+keep_final <- keep_cols[1:52]
+# Grab columns for training set and matching final testing dataset
+training <- training[,keep_cols]
+testing_final <- testing_final[,keep_final]
+```
+
+### Training the models
+
+#### Classification Tree Approach
+Train the decision tree model using rpart and plot the classification tree. 
+```{r}
+rpart <- rpart(classe ~., data = training, method = "class")
+fancyRpartPlot(rpart)
+```
+  
+Make predictions on the testing set we set aside from the official traning data set. Examine the accuracy of the predictions using a confusion martix. 
+```{r}
+rpart_preds <- predict(rpart, testing, type = "class")
+confusionMatrix(rpart_preds, testing$classe)
+```
+The 95% confidence interval for the accuracy of the decision tree model is 71.78% to 73.76%. This is an effective model and a promising first shot. 
+
+#### Random Forest Approach
+Train the random forest model in caret and save the model to avoid repeated running the time consuming step. Make predictions for the testing set and examine accuracy of the predictions using another confusion martix. 
+```{r, eval=FALSE}
+rf <- train(classe~., data = training, method = "rf", prox = TRUE, do.trace = TRUE, ntree = 100)
+saveRDS(rf, "my_rf_model.rds")
+```{r, echo=FALSE}
+rf <- readRDS("my_rf_model.rds")
+```
+```{r}
+rf_pred <- predict(rf, testing); testing$predcorrect <- pred==testing$classe
+confusionMatrix(rf_pred, testing$classe)
+```
+
+The random forest model is extremely effective at classifying the incorrect movements in the excerises. The 95% confidence interal for the accuracy is 98.87% to 99.30%. 
+
+### Expected Error Rate for Final Model
+
+The random forest model is the clear choice for the final predictions. We subtract the accuracy from 1 to calculate the out of sample error rate. 
+```{r}
+OOSerror <- 1 - mean(predict(rf, testing) == testing$classe); OOSerror
+```
+The expected error rate is clearly quite low, around 1%. This is low enough to warrant some concerns about overfitting. This risk should be mitigated by the choice to split the training set into initial training and testing subsets.
+
+### Summary and Predictions
+
+For the purposes of this exercise, two machine learning algorithms were able to effectively classify exercise quality based on senor data. The decision tree approach proved effective with an accuracy near 72%. The random forest model performed extremely well in the classification of the improper exercise movements. An error rate of approximately 1% is quite low and this is a clear choice for the final model. The successful out of sample cross validation suggests we didn't overfit the model to the training set. The model was successful in predicting 20 out of 20 cases in the final testing set, in line with expectations. 
+
+It is likely that the experimental design contributed to the high success rate, and that similar results would be difficult to replicate.   The presence and close supervision of the expert weight lifter guiding the movements of the subjects likely contributed to the performance of the model. It's unlikely that similar results could be achieved in less controlled circumstances. Additional experiments with subjects under less strict supervision, but still being monitored for safety purposes, would help further tune the model with lower risk of overfitting. 
+
+#### Applying the model to the final testing set
+The final component of the exercise applies the model to the final testing set of 20 rows. 
+```{r}
+predict_20 <- predict(rf, testing_final)
+predict_20
+```
+
+These predictions were written to text files and submitted per the instructions. 
+```{r, echo=FALSE, eval=FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predict_20)
+```
